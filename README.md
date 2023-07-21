@@ -1,34 +1,139 @@
-This is a [Next.js](https://nextjs.org/) project bootstrapped with [`create-next-app`](https://github.com/vercel/next.js/tree/canary/packages/create-next-app).
+This repo provides an example of how to pass data to nested RSCs while avoiding prop-drilling, or sending all of the data to the client.
 
-## Getting Started
+## The Problem
 
-First, run the development server:
+In NextJS' [localization guide](https://nextjs.org/docs/app/building-your-application/routing/internationalization#localization), they suggest the following setup:
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
+- Move your `<root>/layout.tsx` to `<root>/[lang]/layout.tsx` 
+- Create `dictionaries/[lang].json` files for each supported language
+- Import the dictionary as a module into layouts or pages
+
+The end result looks something like this:
+
+```tsx
+import { getDictionary } from './dictionaries'
+ 
+export default async function Page({ params: { lang } }) {
+  const dict = await getDictionary(lang) // en
+  return <button>{dict.products.cart}</button> // Add to Cart
+}
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+This is great for an introductory example! But what if we have nested server components? 🤔
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+In this case, let's say this is a Product Details Page with an image carousel, and product details panel where the add to cart button is contained:
 
-This project uses [`next/font`](https://nextjs.org/docs/basic-features/font-optimization) to automatically optimize and load Inter, a custom Google Font.
 
-## Learn More
+- Image Carousel has "Previous" and "Next" buttons that we need localization for
+- Product details contains headings for "Description", and the "Add to Cart" button text
 
-To learn more about Next.js, take a look at the following resources:
+Being good React citizens, we don't want all this code in the page! So let's try and break it up:
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+```tsx
+export const ProductImageCarousel = ({ previousText, nextText }) => {
+  return (
+    <div>
+      <button>{previousText}</button>
+      {/* rest of carousel */}
+      <button>{nextText}</button>
+    </div>
+  )
+}
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js/) - your feedback and contributions are welcome!
+export const AddToCartButton = ({ text }) => {
+  return (
+    <button>{text}</button>
+  )
+}
 
-## Deploy on Vercel
+export const ProductDesription = ({ descriptionText, addToCartButtonText }) => {
+  return (
+    <div>
+      <h2>{descriptionText}</h2>
+      <AddToCartButton text={addToCartButtonText} />
+    </div>
+  )
+}
+```
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+now, let's update our previous page example:
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/deployment) for more details.
+```tsx
+import { getDictionary } from './dictionaries'
+ 
+export default async function Page({ params: { lang } }) {
+  const dict = await getDictionary(lang) // en
+  return (
+    <div>
+      <ProductImageCarousel 
+        previousText={dict['prev']} 
+        nextText={dict['next']} />
+      <ProductDescription 
+        addToCartButtonText={dict['addToCart']} 
+        descriptionText={dict['description']} />
+    </div>
+  )
+}
+```
+
+This is starting to look more like the prop-drilling we've been trying to avoid in React for years! Are we going backwards??
+
+It might be tempting to consider adding `dict` to a React Context, which can be shared throughout the React hierarchy. But doing so adds the data on the client _and_ server. For an app with dozens or hundreds of translations, that's data we don't want to ship to the browser, as it never changes once rendered.
+
+So what do we do?
+
+## Solution
+
+In this repo, we make a compromise: use Context, but store a _reference_ to data in the context.
+
+What does that mean concretely though?
+
+In the translations example, we said we don't want to ship all the translations to the client. But would be it ok to ship, say, the current language to the client?
+
+```tsx
+  // Parse the language from the URL path in a server component
+  const language = parseLanguage(params.locale);
+
+  return (
+    <html lang={language}>
+      <body>
+        {/* store the language string in the context */}
+        <TranslationsProvider language={language}>
+          {children}
+        </TranslationsProvider>
+      </body>
+    </html>
+  );
+```
+
+If we could do that, then we can reference the context from a client component "wrapper". Since client components can render server components, we can then pass the language into a server component in another file:
+
+`src/components/translation/index.tsx`
+
+```tsx
+export const Translation: FC<TranslationProps> = ({ t }) => {
+  const { language } = useContext(TranslationsContext);
+
+  return <ServerTranslation language={language} t={t} />;
+};
+```
+
+`src/components/translation/server.tsx`
+
+```tsx
+export const ServerTranslation: FC<ServerTranslationProps> = ({
+  language,
+  t,
+}) => {
+  const value = translations[language][t];
+  return <>{value}</>;
+};
+```
+
+## Running the example
+
+1. `npm install`
+1. `npm run dev`
+1. go to http://localhost:3000/en or `/it` or `/es`
+
+You should see the translated values in the HTML, but you should NOT see them more than once in the HTML, and not in the serialized props sent down for rehydration.

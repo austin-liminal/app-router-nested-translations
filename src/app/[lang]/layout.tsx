@@ -5,11 +5,11 @@ export default function RootLayout({
   params,
   children,
 }: {
-  params: { locale: string };
+  params: { lang: string };
   children: React.ReactNode;
 }) {
   // Parse the language from the URL path in a server component
-  const language = parseLanguage(params.locale);
+  const language = parseLanguage(params.lang);
 
   return (
     <html lang={language}>
